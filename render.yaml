@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: notas-app
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PLATFORM_FEE
+        value: "0.2"
+      - key: DEMO_MODE
+        value: "true"
+      - key: MIN_WITHDRAW
+        value: "100"
