@@ -3,28 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14111f">
+<meta name="theme-color" content="#008069">
 <meta name="robots" content="noindex,nofollow">
 <title>Notas</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📝%3C/text%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <section id="auth" class="auth">
   <form id="authForm" class="card" autocomplete="on">
-    <div class="pride big"></div>
-    <h1>Bienvenido 🏳️‍🌈</h1>
-    <p class="sub">Conversa con quien quieras y gana por tu tiempo.</p>
+    <div class="logo">💬</div>
+    <h1>Mensajes</h1>
+    <p class="sub">Entra con tu usuario o crea una cuenta nueva.</p>
     <div class="seg">
       <button type="button" data-mode="login" class="on">Entrar</button>
       <button type="button" data-mode="register">Crear cuenta</button>
     </div>
     <input id="u" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" required>
     <input id="p" type="password" placeholder="Contraseña" autocomplete="current-password" required>
-    <label id="adultRow" class="check hidden"><input type="checkbox" id="adult"> Confirmo que tengo 18 años o más</label>
     <p id="authErr" class="err"></p>
     <button class="primary" id="authBtn">Entrar</button>
   </form>
@@ -32,55 +29,55 @@
 
 <div id="app" class="app hidden">
   <aside id="side">
-    <div class="pride"></div>
     <header class="top">
-      <div class="av" id="meAv"></div>
-      <h2 id="title">Chats</h2>
-      <button id="coinChip" class="chip" title="Mi saldo">🪙 <span id="coins">0</span></button>
-      <button id="logout" class="icon" title="Cerrar sesión">⎋</button>
+      <h1>Chats</h1>
+      <button id="menuBtn" class="icon" title="Menú">⋮</button>
     </header>
-    <div id="list"></div>
-    <button id="fab" class="fab" title="Añadir amigo">＋</button>
-    <nav class="nav">
-      <button data-tab="chats" class="on"><i>💬</i>Chats</button>
-      <button data-tab="offers"><i>🤝</i>Ofertas<span class="badge hidden" data-b="offers"></span></button>
-      <button data-tab="friends"><i>👥</i>Amigos<span class="badge hidden" data-b="friends"></span></button>
-      <button data-tab="wallet"><i>👛</i>Cartera</button>
+    <nav class="tabs">
+      <button data-tab="chats" class="on">CHATS</button>
+      <button data-tab="requests">SOLICITUDES<span class="badge hidden" id="reqBadge"></span></button>
+      <button data-tab="add">AÑADIR</button>
     </nav>
+    <div id="list"></div>
+    <button id="fab" class="fab" title="Añadir amigo">💬</button>
   </aside>
 
   <main id="main">
-    <div id="empty" class="empty">Elige un chat para empezar 💜</div>
+    <div id="empty" class="empty"><div class="logo">💬</div><h2>Mensajes</h2><p>Elige un chat para empezar a escribir.</p></div>
     <section id="room" class="room hidden">
-      <div class="pride"></div>
       <header class="top">
         <button id="back" class="icon">←</button>
         <div class="av" id="rAv"></div>
-        <div class="grow"><b id="rName"></b><small id="rSub"></small></div>
-        <button id="dealBtn" class="icon" title="Proponer acuerdo">🤝</button>
+        <div class="grow" id="rHead"><b id="rName"></b><small id="rSub"></small></div>
         <button id="moreBtn" class="icon" title="Más">⋮</button>
       </header>
       <div id="msgs" class="msgs"></div>
       <div id="emojis" class="emojis hidden"></div>
-      <div id="lock" class="lock hidden"><span id="lockTxt"></span><button class="primary" id="lockBtn">Proponer acuerdo</button></div>
       <form id="form" class="composer">
-        <button type="button" id="emojiBtn" class="icon">😊</button>
-        <button type="button" id="imgBtn" class="icon">📷</button>
-        <button type="button" id="giftBtn" class="icon" title="Enviar propina">🎁</button>
-        <input type="file" id="file" accept="image/*" hidden>
-        <input id="text" placeholder="Mensaje" autocomplete="off">
+        <div class="pill">
+          <button type="button" id="emojiBtn" class="ib" title="Emojis">😊</button>
+          <input id="text" placeholder="Mensaje" autocomplete="off">
+          <button type="button" id="clipBtn" class="ib" title="Adjuntar">📎</button>
+          <button type="button" id="camBtn" class="ib" title="Cámara">📷</button>
+        </div>
         <button class="send" title="Enviar">➤</button>
       </form>
+      <input type="file" id="fileCam" accept="image/*" capture="environment" hidden>
+      <input type="file" id="fileGal" accept="image/*" multiple hidden>
     </section>
   </main>
 </div>
 
 <div id="sheet" class="sheet hidden">
   <div class="scrim" id="scrim"></div>
-  <div class="panel"><div class="grab"></div><h3 id="sheetTitle"></h3><div id="sheetBody"></div></div>
+  <div class="panel"><h3 id="sheetTitle"></h3><div id="sheetBody"></div></div>
 </div>
 <div id="toast" class="toast hidden"></div>
-<div id="viewer" class="viewer hidden"><img id="viewerImg" alt=""></div>
+
+<div id="viewer" class="viewer hidden">
+  <div class="vbar"><button id="vClose" class="icon" title="Cerrar">✕</button><a id="vDl" class="icon" title="Descargar" download="imagen">⬇</a></div>
+  <img id="vImg" alt="Imagen ampliada">
+</div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="app.js"></script>
