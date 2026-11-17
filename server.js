@@ -31,6 +31,7 @@ const User = mongoose.model('User', new mongoose.Schema({
   username: { type: String, unique: true, required: true, lowercase: true, trim: true },
   password: { type: String, required: true },
   bio: { type: String, default: '' },
+  lastSeen: { type: Date, default: null }, // última vez en línea
   nicknames: { type: Map, of: String, default: {} }, // apodos privados: { idAmigo: "apodo" }
   friends: ref(), requests: ref(), sent: ref(), blocked: ref()
 }));
@@ -48,6 +49,12 @@ const sign = (u) => jwt.sign({ id: u._id }, SECRET, { expiresIn: '30d' });
 const pub = (u) => ({ id: String(u._id), username: u.username });
 const notify = (ev, ...ids) => ids.forEach((i) => io.to(String(i)).emit(ev));
 const fail = (res, code, error) => res.status(code).json({ error });
+// Presencia: uid -> { n: conexiones abiertas, timer }
+const online = new Map();
+async function broadcastPresence(uid, on, lastSeen) {
+  const u = await User.findById(uid).select('friends');
+  if (u) u.friends.forEach((f) => io.to(String(f)).emit('presence', { id: String(uid), online: on, lastSeen }));
+}
 const areFriends = async (a, b) => !!(await User.exists({ _id: a, friends: b }));
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'media' });
 
@@ -62,11 +69,11 @@ function auth(req, res, next) {
 
 async function stateOf(uid) {
   const u = await User.findById(uid)
-    .populate('friends', 'username bio').populate('requests', 'username').populate('sent', 'username');
+    .populate('friends', 'username bio lastSeen').populate('requests', 'username').populate('sent', 'username');
   if (!u) return null;
   return {
     me: { ...pub(u), bio: u.bio },
-    friends: u.friends.map((f) => ({ ...pub(f), bio: f.bio || '', nick: u.nicknames.get(String(f._id)) || '' })),
+    friends: u.friends.map((f) => ({ ...pub(f), bio: f.bio || '', nick: u.nicknames.get(String(f._id)) || '', online: online.has(String(f._id)), lastSeen: f.lastSeen || null })),
     requests: u.requests.map(pub), sent: u.sent.map(pub)
   };
 }
@@ -221,7 +228,26 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.join(String(socket.uid));
+  const uid = String(socket.uid);
+  socket.join(uid);
+
+  // Presencia (con 4 s de margen para no parpadear al recargar la página)
+  const e = online.get(uid) || { n: 0, timer: null };
+  const wasOnline = online.has(uid);
+  clearTimeout(e.timer); e.timer = null; e.n++; online.set(uid, e);
+  if (!wasOnline) broadcastPresence(uid, true, null);
+
+  socket.on('disconnect', () => {
+    const x = online.get(uid); if (!x) return;
+    x.n--;
+    if (x.n <= 0) x.timer = setTimeout(async () => {
+      online.delete(uid);
+      const ls = new Date();
+      await User.updateOne({ _id: uid }, { lastSeen: ls }).catch(() => {});
+      broadcastPresence(uid, false, ls);
+    }, 4000);
+  });
+
   socket.on('message', async ({ to, text = '' } = {}, cb = () => {}) => {
     try {
       text = String(text).trim().slice(0, 4000);

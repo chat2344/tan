@@ -4,10 +4,30 @@ const MAX_MB = 80;
 const COLORS = ['#e4572e','#17a398','#7768ae','#f3a712','#2e86ab','#d1495b','#4f772d','#c06c84'];
 const EMOJIS = '😀 😃 😄 😁 😆 😅 😂 🤣 🥲 😊 😇 🙂 😉 😍 🥰 😘 😋 😛 😜 🤪 🤔 😏 😴 😮 😳 🥺 😢 😭 😤 😡 🤯 😱 🥵 🥶 🤗 🤭 😎 🥳 👍 👎 👏 🙌 🙏 💪 👋 🤝 ✌️ 🤞 👌 👀 💀 🔥 ✨ 💯 🎉 🏳️‍🌈 🌈 ❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💕 💖 💋 🍑 🍆 🍸 🍷 🍺 ☕ 🍕 🍔 🍩 🎂 🎁 🎶 🎮 ⚽ 🏖️ ✈️ 🚗 🏠 🌞 🌙 ⭐ 🐶 🐱 🦄 🦋'.split(' ');
 
-if (!DISCRETO) {
-  document.title = 'Mensajes';
-  $('link[rel=icon]').href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E💬%3C/text%3E%3C/svg%3E";
+// ---------- Indicador en la pestaña (título + ícono con punto rojo) ----------
+const BASE_TITLE = DISCRETO ? 'Notas' : 'Mensajes';
+const BASE_EMOJI = DISCRETO ? '📝' : '💬';
+function drawFavicon(n) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const x = cv.getContext('2d');
+  x.font = '52px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  x.fillText(BASE_EMOJI, 2, 54);
+  if (n) {
+    x.fillStyle = '#e5484d'; x.beginPath(); x.arc(46, 18, 17, 0, Math.PI * 2); x.fill();
+    x.fillStyle = '#fff'; x.font = 'bold 22px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(n > 9 ? '9+' : String(n), 46, 19);
+  }
+  $('link[rel=icon]').href = cv.toDataURL('image/png');
 }
+let lastN = -1, hiddenNew = 0;
+function updateIndicator() {
+  const n = Object.values(unread).reduce((a, b) => a + b, 0) + hiddenNew;
+  if (n === lastN) return; lastN = n;
+  document.title = (n ? `(${n}) ` : '') + BASE_TITLE;
+  drawFavicon(n);
+}
+const clearHidden = () => { if (!document.hidden && hiddenNew) { hiddenNew = 0; updateIndicator(); } };
+document.addEventListener('visibilitychange', clearHidden); window.addEventListener('focus', clearHidden);
 
 let token = localStorage.getItem('token'), me = null, socket = null;
 let S = { friends: [], requests: [], sent: [] }, last = {};
@@ -15,7 +35,7 @@ let tab = 'chats', current = null, unread = {}, mode = 'login', lastDay = '';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const color = (n) => COLORS[[...n].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
-const avatar = (el, n) => { el.textContent = [...n][0]; el.style.background = color(n); };
+const avatar = (el, n, on = false) => { el.textContent = [...n][0]; el.style.background = color(n); el.classList.toggle('on', !!on); };
 const nm = (f) => f.nick || f.username;                       // apodo si existe
 const hhmm = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
@@ -23,6 +43,14 @@ function dayLabel(d) {
   const t = new Date(), y = new Date(Date.now() - 864e5);
   if (sameDay(d, t)) return 'Hoy'; if (sameDay(d, y)) return 'Ayer';
   return new Date(d).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
+}
+function seenText(f) {
+  if (f.online) return 'en línea';
+  if (!f.lastSeen) return '';
+  const d = f.lastSeen;
+  if (sameDay(d, new Date())) return `últ. vez hoy a las ${hhmm(d)}`;
+  if (sameDay(d, Date.now() - 864e5)) return `últ. vez ayer a las ${hhmm(d)}`;
+  return `últ. vez el ${new Date(d).toLocaleDateString()} a las ${hhmm(d)}`;
 }
 const shortDay = (d) => sameDay(d, new Date()) ? hhmm(d) : sameDay(d, Date.now() - 864e5) ? 'Ayer' : new Date(d).toLocaleDateString();
 const mediaUrl = (u) => u.startsWith('/api/media/') ? `${u}?t=${encodeURIComponent(token)}` : u;
@@ -80,6 +108,11 @@ async function start() {
   socket = io({ auth: { token } });
   socket.on('friends:update', () => { loadState(); loadLast(); });
   socket.on('message', onMessage);
+  socket.on('presence', (p) => {
+    const f = S.friends.find((x) => x.id === p.id); if (!f) return;
+    f.online = p.online; if (p.lastSeen) f.lastSeen = p.lastSeen;
+    render(); updateRoom();
+  });
   EMOJIS.forEach((em) => {
     const b = document.createElement('button'); b.type = 'button'; b.textContent = em;
     b.onclick = () => { $('#text').value += em; $('#text').focus(); };
@@ -105,6 +138,7 @@ function render() {
   const rb = $('#reqBadge'); rb.textContent = S.requests.length; rb.classList.toggle('hidden', !S.requests.length);
   const list = $('#list'); list.innerHTML = '';
   ({ chats: rChats, requests: rRequests, add: rAdd })[tab](list);
+  updateIndicator();
 }
 
 function rChats(list) {
@@ -116,7 +150,7 @@ function rChats(list) {
     const r = document.createElement('div'); r.className = 'row' + (current && current.id === f.id ? ' on' : '');
     r.innerHTML = `<div class="av"></div><div class="mid"><div class="l1"><b>${esc(nm(f))}</b><time>${l ? shortDay(l.createdAt) : ''}</time></div>
       <div class="l2"><span>${esc(prev)}</span>${unread[f.id] ? `<em class="badge">${unread[f.id]}</em>` : ''}</div></div>`;
-    avatar(r.firstChild, nm(f)); r.onclick = () => openRoom(f); list.append(r);
+    avatar(r.firstChild, nm(f), f.online); r.onclick = () => openRoom(f); list.append(r);
   });
 }
 
@@ -179,9 +213,9 @@ $('#back').onclick = closeRoom;
 function updateRoom() {
   if (!current) return;
   const f = S.friends.find((x) => x.id === current.id); if (!f) return;
-  current = f; avatar($('#rAv'), nm(f));
+  current = f; avatar($('#rAv'), nm(f), f.online);
   $('#rName').textContent = nm(f);
-  $('#rSub').textContent = f.nick ? `@${f.username}` : (f.bio || 'Toca para ver opciones');
+  $('#rSub').textContent = seenText(f) || f.bio || '';
 }
 
 // Apodos
@@ -219,10 +253,11 @@ function addMsg(m) {
 const scrollDown = () => { const b = $('#msgs'); b.scrollTop = b.scrollHeight; };
 
 function onMessage(m) {
-  const other = m.from === me.id ? m.to : m.from;
+  const other = m.from === me.id ? m.to : m.from, incoming = m.from !== me.id;
   last[other] = { text: m.text, image: !!m.image, from: m.from, createdAt: m.createdAt };
-  if (current && current.id === other) { addMsg(m); render(); }
-  else { unread[other] = (unread[other] || 0) + 1; render(); }
+  if (current && current.id === other) { addMsg(m); if (incoming && document.hidden) hiddenNew++; }
+  else if (incoming) unread[other] = (unread[other] || 0) + 1;
+  render();
 }
 $('#form').onsubmit = (e) => {
   e.preventDefault();
