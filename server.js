@@ -14,7 +14,8 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+// Detecta conexiones caídas más rápido (mejora también el estado «en línea»)
+const io = new Server(server, { pingInterval: 10000, pingTimeout: 10000 });
 const SECRET = process.env.JWT_SECRET || 'cambia-este-secreto';
 const MAX_IMG = 80 * 1024 * 1024; // 80 MB
 const IMG_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
@@ -47,7 +48,10 @@ const Message = mongoose.model('Message', new mongoose.Schema({
 // ---------- Utilidades ----------
 const sign = (u) => jwt.sign({ id: u._id }, SECRET, { expiresIn: '30d' });
 const pub = (u) => ({ id: String(u._id), username: u.username });
-const notify = (ev, ...ids) => ids.forEach((i) => io.to(String(i)).emit(ev));
+const notify = (ev, ...ids) => {
+  if (ev === 'friends:update') friendCache.clear(); // cambió alguna amistad/apodo/bloqueo
+  ids.forEach((i) => io.to(String(i)).emit(ev));
+};
 const fail = (res, code, error) => res.status(code).json({ error });
 // Presencia: uid -> { n: conexiones abiertas, timer }
 const online = new Map();
@@ -55,7 +59,16 @@ async function broadcastPresence(uid, on, lastSeen) {
   const u = await User.findById(uid).select('friends');
   if (u) u.friends.forEach((f) => io.to(String(f)).emit('presence', { id: String(uid), online: on, lastSeen }));
 }
-const areFriends = async (a, b) => !!(await User.exists({ _id: a, friends: b }));
+// Caché corta de amistades: evita una consulta a Mongo por cada mensaje enviado
+const friendCache = new Map();
+const areFriends = async (a, b) => {
+  const k = `${a}:${b}`, c = friendCache.get(k);
+  if (c && Date.now() - c.t < 60000) return c.ok;
+  const ok = !!(await User.exists({ _id: a, friends: b }));
+  if (friendCache.size > 5000) friendCache.clear();
+  friendCache.set(k, { ok, t: Date.now() });
+  return ok;
+};
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'media' });
 
 function auth(req, res, next) {
@@ -69,11 +82,11 @@ function auth(req, res, next) {
 
 async function stateOf(uid) {
   const u = await User.findById(uid)
-    .populate('friends', 'username bio lastSeen').populate('requests', 'username').populate('sent', 'username');
+    .populate('friends', 'username bio lastSeen nicknames').populate('requests', 'username').populate('sent', 'username');
   if (!u) return null;
   return {
     me: { ...pub(u), bio: u.bio },
-    friends: u.friends.map((f) => ({ ...pub(f), bio: f.bio || '', nick: u.nicknames.get(String(f._id)) || '', online: online.has(String(f._id)), lastSeen: f.lastSeen || null })),
+    friends: u.friends.map((f) => ({ ...pub(f), bio: f.bio || '', nick: u.nicknames.get(String(f._id)) || '', theirNick: (f.nicknames && f.nicknames.get(String(u._id))) || '', online: online.has(String(f._id)), lastSeen: f.lastSeen || null })),
     requests: u.requests.map(pub), sent: u.sent.map(pub)
   };
 }
@@ -116,6 +129,7 @@ app.post('/api/nickname', auth, async (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 30);
   if (!mongoose.isValidObjectId(id) || !(await areFriends(req.uid, id))) return fail(res, 400, 'Datos no válidos');
   await User.updateOne({ _id: req.uid }, name ? { $set: { [`nicknames.${id}`]: name } } : { $unset: { [`nicknames.${id}`]: 1 } });
+  notify('friends:update', req.uid, id); // el otro ve el cambio al instante
   res.json({ ok: true });
 });
 
@@ -248,14 +262,17 @@ io.on('connection', (socket) => {
     }, 4000);
   });
 
-  socket.on('message', async ({ to, text = '' } = {}, cb = () => {}) => {
+  socket.on('message', async ({ to, text = '', cid } = {}, cb = () => {}) => {
     try {
       text = String(text).trim().slice(0, 4000);
       if (!text) return cb({ error: 'Mensaje vacío' });
       if (!mongoose.isValidObjectId(to) || !(await areFriends(socket.uid, to))) return cb({ error: 'No son amigos' });
-      const m = await Message.create({ from: socket.uid, to, text });
-      io.to(String(socket.uid)).to(String(to)).emit('message', m);
+      // Primero se entrega (rápido) y después se guarda en la base de datos
+      const m = new Message({ from: socket.uid, to, text });
+      const payload = { ...m.toObject(), cid: typeof cid === 'string' ? cid.slice(0, 40) : undefined };
+      io.to(String(socket.uid)).to(String(to)).emit('message', payload);
       cb({ ok: true });
+      m.save().catch(() => socket.emit('message:failed', { cid: payload.cid }));
     } catch { cb({ error: 'No se pudo enviar' }); }
   });
 });

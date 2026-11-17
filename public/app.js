@@ -27,6 +27,7 @@ function updateIndicator() {
   drawFavicon(n);
 }
 const clearHidden = () => { if (!document.hidden && hiddenNew) { hiddenNew = 0; updateIndicator(); } };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && socket && !socket.connected) socket.connect(); });
 document.addEventListener('visibilitychange', clearHidden); window.addEventListener('focus', clearHidden);
 
 let token = localStorage.getItem('token'), me = null, socket = null;
@@ -105,7 +106,17 @@ async function start() {
   try { await Promise.all([loadState(), loadLast()]); }
   catch { localStorage.removeItem('token'); token = null; return; }
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
-  socket = io({ auth: { token } });
+  let firstConn = true;
+  socket = io({ auth: { token }, transports: ['websocket', 'polling'], reconnectionDelayMax: 2000 });
+  // Al reconectar, se ponen al día los mensajes que llegaron mientras no había conexión
+  socket.on('connect', () => {
+    if (firstConn) { firstConn = false; return; }
+    loadState(); loadLast(); if (current) loadMsgs();
+  });
+  socket.on('message:failed', ({ cid }) => {
+    if (pending[cid]) { pending[cid].remove(); delete pending[cid]; }
+    toast('No se pudo enviar el mensaje');
+  });
   socket.on('friends:update', () => { loadState(); loadLast(); });
   socket.on('message', onMessage);
   socket.on('presence', (p) => {
@@ -121,7 +132,11 @@ async function start() {
   render();
 }
 async function loadState() {
-  const d = await api('/api/state'); me = d.me; S = d;
+  const d = await api('/api/state');
+  const prev = Object.fromEntries((S.friends || []).map((f) => [f.id, f.theirNick]));
+  me = d.me; S = d;
+  // Aviso cuando un amigo te pone o cambia tu apodo
+  S.friends.forEach((f) => { if (f.theirNick && prev[f.id] !== undefined && prev[f.id] !== f.theirNick) toast(`${nm(f)} te puso el apodo «${f.theirNick}»`); });
   if (current && !S.friends.some((f) => f.id === current.id)) closeRoom();
   render(); updateRoom();
 }
@@ -201,8 +216,15 @@ async function openRoom(f) {
   $('#empty').classList.add('hidden'); $('#room').classList.remove('hidden'); $('#app').classList.add('open');
   $('#msgs').innerHTML = ''; $('#emojis').classList.add('hidden');
   render(); updateRoom();
-  try { const msgs = await api('/api/messages/' + f.id); if (current && current.id === f.id) msgs.forEach(addMsg); }
-  catch (e) { toast(e.message); }
+  await loadMsgs();
+}
+async function loadMsgs() {
+  const f = current; if (!f) return;
+  try {
+    const msgs = await api('/api/messages/' + f.id);
+    if (!current || current.id !== f.id) return;
+    $('#msgs').innerHTML = ''; lastDay = ''; msgs.forEach(addMsg);
+  } catch (e) { toast(e.message); }
 }
 function closeRoom() {
   current = null; $('#room').classList.add('hidden'); $('#empty').classList.remove('hidden');
@@ -216,10 +238,13 @@ function updateRoom() {
   current = f; avatar($('#rAv'), nm(f), f.online);
   $('#rName').textContent = nm(f);
   $('#rSub').textContent = seenText(f) || f.bio || '';
+  const nn = $('#nickNote');
+  nn.textContent = f.theirNick ? `Te tiene guardado como «${f.theirNick}»` : '';
+  nn.classList.toggle('hidden', !f.theirNick);
 }
 
 // Apodos
-const nickSheet = () => current && sheet('Apodo', `<p class="hint">Solo tú verás este apodo. Usuario real: <b>@${esc(current.username)}</b></p>
+const nickSheet = () => current && sheet('Apodo', `<p class="hint">Tu amigo también podrá ver el apodo que le pongas. Usuario real: <b>@${esc(current.username)}</b>${current.theirNick ? `<br>Te puso: «${esc(current.theirNick)}»` : ''}</p>
   <input id="nick" maxlength="30" placeholder="Escribe un apodo" value="${esc(current.nick || '')}">
   <button class="primary" id="go">Guardar</button><p class="hint">Déjalo vacío para quitar el apodo.</p><p class="err" id="sErr"></p>`,
   () => $('#go').onclick = () => run(() => api('/api/nickname', 'POST', { id: current.id, name: $('#nick').value }).then(loadState), 'Apodo guardado'));
@@ -234,7 +259,7 @@ $('#moreBtn').onclick = roomMenu; $('#rHead').onclick = roomMenu;
 
 // Mensajes
 const onlyEmoji = (t) => t && t.length <= 12 && /^(\p{Extended_Pictographic}|\u200d|\ufe0f|\s)+$/u.test(t);
-function addMsg(m) {
+function addMsg(m, isPending) {
   if (!sameDay(m.createdAt, lastDay || 0) || !lastDay) {
     const d = document.createElement('div'); d.className = 'day'; d.textContent = dayLabel(m.createdAt); $('#msgs').append(d);
   }
@@ -248,21 +273,36 @@ function addMsg(m) {
   }
   if (m.text) { const s = document.createElement(m.image ? 'div' : 'span'); if (m.image) s.className = 'cap'; s.textContent = m.text; el.append(s); }
   const t = document.createElement('time'); t.textContent = hhmm(m.createdAt); el.append(t);
+  if (isPending) el.classList.add('pending');
   $('#msgs').append(el); scrollDown();
+  return el;
 }
 const scrollDown = () => { const b = $('#msgs'); b.scrollTop = b.scrollHeight; };
 
+const pending = {}; // mensajes enviados que aún no confirma el servidor
 function onMessage(m) {
   const other = m.from === me.id ? m.to : m.from, incoming = m.from !== me.id;
   last[other] = { text: m.text, image: !!m.image, from: m.from, createdAt: m.createdAt };
+  if (m.cid && pending[m.cid]) {            // confirmación de un mensaje propio ya mostrado
+    const el = pending[m.cid]; delete pending[m.cid];
+    el.classList.remove('pending'); const t = el.querySelector('time'); if (t) t.textContent = hhmm(m.createdAt);
+    return render();
+  }
   if (current && current.id === other) { addMsg(m); if (incoming && document.hidden) hiddenNew++; }
   else if (incoming) unread[other] = (unread[other] || 0) + 1;
   render();
 }
+
+// El mensaje aparece al instante (se atenúa un momento hasta que el servidor lo confirma)
 $('#form').onsubmit = (e) => {
   e.preventDefault();
   const t = $('#text').value.trim(); if (!t || !current) return;
-  socket.emit('message', { to: current.id, text: t }, (r) => r && r.error && toast(r.error));
+  const cid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6), now = new Date().toISOString();
+  const el = addMsg({ from: me.id, to: current.id, text: t, createdAt: now }, true);
+  pending[cid] = el; last[current.id] = { text: t, image: false, from: me.id, createdAt: now }; render();
+  socket.emit('message', { to: current.id, text: t, cid }, (r) => {
+    if (r && r.error) { el.remove(); delete pending[cid]; toast(r.error); }
+  });
   $('#text').value = '';
 };
 $('#emojiBtn').onclick = () => $('#emojis').classList.toggle('hidden');
